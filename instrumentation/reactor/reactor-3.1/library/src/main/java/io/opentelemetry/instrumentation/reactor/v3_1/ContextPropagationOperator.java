@@ -46,6 +46,8 @@ public final class ContextPropagationOperator {
 
   private static final Object VALUE = new Object();
 
+  public static final String SUPPRESS_INSTRUMENTATION_KEY = "InstrumentationSuppression";
+
   @Nullable
   private static final MethodHandle MONO_CONTEXT_WRITE_METHOD = getContextWriteMethod(Mono.class);
 
@@ -239,7 +241,16 @@ public final class ContextPropagationOperator {
 
     @Override
     public CoreSubscriber<? super T> apply(Scannable publisher, CoreSubscriber<? super T> sub) {
-      return new TracingSubscriber<>(sub, sub.currentContext());
+
+        reactor.util.context.Context ctx = sub.currentContext();
+
+        if (ctx != null &&
+            ctx.getOrDefault(ContextPropagationOperator.SUPPRESS_INSTRUMENTATION_KEY, false))
+        {
+           return sub;
+        }
+
+      return new TracingSubscriber<>(sub, ctx);
     }
   }
 

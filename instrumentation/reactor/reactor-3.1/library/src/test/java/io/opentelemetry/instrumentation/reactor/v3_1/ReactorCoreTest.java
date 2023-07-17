@@ -25,6 +25,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,57 @@ class ReactorCoreTest extends AbstractReactorCoreTest {
   void tearDown() {
     tracingOperator.resetOnEachOperator();
   }
+
+    @Test
+    void fabianmDummy() {
+
+        reactor.util.context.Context reenableContext = reactor.util.context.Context.of(
+            ContextPropagationOperator.SUPPRESS_INSTRUMENTATION_KEY,
+            false
+        );
+
+        reactor.util.context.Context suppressContext = reactor.util.context.Context.of(
+            ContextPropagationOperator.SUPPRESS_INSTRUMENTATION_KEY,
+            true
+        );
+
+        Mono<Integer> mono = Mono.fromCallable(
+                                     () -> {
+                                         Span.current().setAttribute("inner", "foo");
+                                         Span.current().setAttribute("value", String.valueOf(1));
+                                         return 1;
+                                     })
+                                 .publishOn(reactor.core.scheduler.Schedulers.parallel())
+                                 .subscriberContext(reenableContext)
+                                 .publishOn(reactor.core.scheduler.Schedulers.elastic())
+                                 .map(input -> {
+                                     Span.current().setAttribute("value", String.valueOf(input + 1));
+                                     return input + 1;
+                                 })
+                                 .map(input -> {
+                                     Span.current().setAttribute("value", String.valueOf(input + 1));
+                                     return input + 1;
+                                 })
+                                 .subscriberContext(suppressContext);
+        ;
+
+        testing.runWithSpan(
+            "parent",
+            () ->
+                monoSpan(
+                    mono,
+                    "inner"
+                ).block());
+
+        testing.waitAndAssertTraces(
+            trace ->
+                trace.hasSpansSatisfyingExactly(
+                    span -> span.hasName("parent").hasNoParent(),
+                    span ->
+                        span.hasName("inner")
+                            .hasParent(trace.getSpan(0))
+                            .hasAttributes(attributeEntry("inner", "foo"), attributeEntry("value", "1"))));
+    }
 
   @Test
   void monoInNonBlockingPublisherAssembly() {
