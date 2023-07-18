@@ -223,7 +223,25 @@ public final class ContextPropagationOperator {
 
   private static boolean shouldInstrument(Scannable publisher) {
     // skip if Flux/Mono #just, #empty, #error
-    return !(publisher instanceof Fuseable.ScalarCallable);
+    if (publisher instanceof Fuseable.ScalarCallable) {
+        return false;
+    }
+
+      // if (publisher.isScanAvailable()) {
+      //     System.out.println();
+      //     System.out.print(publisher.getClass().getName());
+      //     System.out.print(" --->> ");
+      //     System.out.print(publisher.name());
+      //     System.out.print(" --->> ");
+      //     System.out.println(publisher.operatorName());
+      // }
+
+      if (publisher.name().startsWith("beginInstrumentationSuppression")) {
+        //System.out.println("SKIPPING");
+        return false;
+    }
+
+    return true;
   }
 
   private static class Lifter<T>

@@ -25,6 +25,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -32,11 +33,15 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Publisher;
+import reactor.core.CoreSubscriber;
 import reactor.core.Scannable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Operators;
 import reactor.core.publisher.UnicastProcessor;
 import reactor.test.StepVerifier;
+
+import javax.annotation.Nullable;
 
 class ReactorCoreTest extends AbstractReactorCoreTest {
 
@@ -77,6 +82,49 @@ class ReactorCoreTest extends AbstractReactorCoreTest {
   void tearDown() {
     tracingOperator.resetOnEachOperator();
   }
+
+    @Test
+    void fabianmDummy() {
+
+        Mono<Integer> monoHead = BeginInstrumentationSuppressionMono.create(Mono.fromCallable(
+                                         () -> {
+                                             Span.current().setAttribute("inner", "foo");
+                                             Span.current().setAttribute("value", String.valueOf(1));
+                                             return 1;
+                                         })
+                                     .publishOn(reactor.core.scheduler.Schedulers.parallel())
+                                     .log());
+
+        Mono<Integer> mono = EndInstrumentationSuppressionMono.create(monoHead
+                             .publishOn(reactor.core.scheduler.Schedulers.elastic())
+                             .map(input -> {
+                                 Span.current().setAttribute("value", String.valueOf(input + 1));
+                                 return input + 1;
+                             })
+                             .map(input -> {
+                                 Span.current().setAttribute("value", String.valueOf(input + 1));
+                                 return input + 1;
+                             })
+                             .log()
+                             );
+
+        testing.runWithSpan(
+            "parent",
+            () ->
+                monoSpan(
+                    mono,
+                    "inner"
+                ).block());
+
+        testing.waitAndAssertTraces(
+            trace ->
+                trace.hasSpansSatisfyingExactly(
+                    span -> span.hasName("parent").hasNoParent(),
+                    span ->
+                        span.hasName("inner")
+                            .hasParent(trace.getSpan(0))
+                            .hasAttributes(attributeEntry("inner", "foo"), attributeEntry("value", "1"))));
+    }
 
   @Test
   void monoInNonBlockingPublisherAssembly() {
@@ -571,4 +619,74 @@ class ReactorCoreTest extends AbstractReactorCoreTest {
       throw new AssertionError(t);
     }
   }
+
+    static class BeginInstrumentationSuppressionMono extends InstrumentationSuppressionMono {
+
+        static <T> Mono<T> create(Mono<T> source) {
+            return new BeginInstrumentationSuppressionMono(source).flatMap(unused -> source);
+        }
+
+        private BeginInstrumentationSuppressionMono(Mono<?> source) {
+            super(source, true);
+        }
+    }
+
+    static class EndInstrumentationSuppressionMono extends InstrumentationSuppressionMono {
+
+        static <T> Mono<T> create(Mono<T> source) {
+            return new EndInstrumentationSuppressionMono(source).flatMap(unused -> source);
+        }
+
+        private EndInstrumentationSuppressionMono(Mono<?> source) {
+            super(source, false);
+        }
+    }
+
+    static class InstrumentationSuppressionMono extends Mono<Object> implements Scannable {
+        private static final Object VALUE = new Object();
+
+        static <T> Mono<T> create(Mono<T> source, boolean shouldSuppressInstrumentation) {
+            return new InstrumentationSuppressionMono(source, shouldSuppressInstrumentation).flatMap(unused -> source);
+        }
+        private final Scannable sourceScannable;
+        private final boolean isSuppressed;
+
+        private InstrumentationSuppressionMono(Mono<?> source, boolean shouldSuppressInstrumentation) {
+            this.isSuppressed = shouldSuppressInstrumentation;
+            if (source instanceof Scannable) {
+                this.sourceScannable = (Scannable)source;
+            } else {
+                this.sourceScannable = null;
+            }
+        }
+
+        @Override
+        @Nullable
+        // Interface method doesn't have type parameter, so we can't add it either.
+        @SuppressWarnings("rawtypes")
+        public Object scanUnsafe(Attr attr) {
+            if (attr == Attr.NAME) {
+                String suffix = "";
+                if (this.sourceScannable != null) {
+                    suffix = "." + this.sourceScannable.name() + "(" + this.sourceScannable.operatorName() + ")";
+                }
+                if (this.isSuppressed) {
+                    return "beginInstrumentationSuppression" + suffix;
+                }
+
+                return "endInstrumentationSuppression" + suffix;
+            }
+
+            if (this.sourceScannable != null) {
+                return this.sourceScannable.scanUnsafe(attr);
+            }
+
+            return null;
+        }
+
+        @Override
+        public void subscribe(CoreSubscriber<? super Object> actual) {
+            actual.onSubscribe(Operators.scalarSubscription(actual, VALUE));
+        }
+    }
 }
