@@ -34,7 +34,6 @@ import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.CoreSubscriber;
-import reactor.core.Fuseable;
 import reactor.core.Scannable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Hooks;
@@ -223,25 +222,7 @@ public final class ContextPropagationOperator {
 
   private static boolean shouldInstrument(Scannable publisher) {
     // skip if Flux/Mono #just, #empty, #error
-    if (publisher instanceof Fuseable.ScalarCallable) {
-        return false;
-    }
-
-      // if (publisher.isScanAvailable()) {
-      //     System.out.println();
-      //     System.out.print(publisher.getClass().getName());
-      //     System.out.print(" --->> ");
-      //     System.out.print(publisher.name());
-      //     System.out.print(" --->> ");
-      //     System.out.println(publisher.operatorName());
-      // }
-
-      if (publisher.name().startsWith("beginInstrumentationSuppression")) {
-        //System.out.println("SKIPPING");
-        return false;
-    }
-
-    return true;
+    return false;
   }
 
   private static class Lifter<T>
