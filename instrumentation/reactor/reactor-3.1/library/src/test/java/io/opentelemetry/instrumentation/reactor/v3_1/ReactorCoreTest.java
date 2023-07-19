@@ -259,6 +259,47 @@ class ReactorCoreTest extends AbstractReactorCoreTest {
         .isPresent();
   }
 
+    @Test
+    void fabianmDummy() {
+
+        Mono<Integer> mono = ContextPropagationOperator.InstrumentationSuppressionMono.create(Mono
+            .fromCallable(
+                () -> {
+                    Span.current().setAttribute("inner", "foo");
+                    Span.current().setAttribute("value", String.valueOf(1));
+                    return 1;
+                })
+            .publishOn(reactor.core.scheduler.Schedulers.parallel())
+            .log())
+            .publishOn(reactor.core.scheduler.Schedulers.elastic())
+            .map(input -> {
+                Span.current().setAttribute("value", String.valueOf(input + 1));
+                return input + 1;
+            })
+            .map(input -> {
+                Span.current().setAttribute("value", String.valueOf(input + 1));
+                return input + 1;
+            })
+            .log();
+
+        testing.runWithSpan(
+            "parent",
+            () ->
+                monoSpan(
+                    mono,
+                    "inner"
+                ).block());
+
+        testing.waitAndAssertTraces(
+            trace ->
+                trace.hasSpansSatisfyingExactly(
+                    span -> span.hasName("parent").hasNoParent(),
+                    span ->
+                        span.hasName("inner")
+                            .hasParent(trace.getSpan(0))
+                            .hasAttributes(attributeEntry("inner", "foo"), attributeEntry("value", "3"))));
+    }
+
   @Test
   void fluxParentsAccessible() {
     UnicastProcessor<String> source = UnicastProcessor.create();

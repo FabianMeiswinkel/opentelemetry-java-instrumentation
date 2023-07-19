@@ -223,8 +223,96 @@ public final class ContextPropagationOperator {
 
   private static boolean shouldInstrument(Scannable publisher) {
     // skip if Flux/Mono #just, #empty, #error
-    return !(publisher instanceof Fuseable.ScalarCallable);
+    if (publisher instanceof Fuseable.ScalarCallable) {
+        return false;
+    }
+
+    if (!publisher.isScanAvailable()) {
+        return true;
+    }
+
+    if (publisher.parents().anyMatch(p -> p instanceof InstrumentationSuppressionMono)) {
+        return false;
+    }
+
+    return true;
   }
+
+    interface InstrumentationSuppression extends Scannable {
+
+    }
+
+    static class InstrumentationSuppressionScannable implements InstrumentationSuppression {
+
+      private final Scannable innerScannable;
+
+      public InstrumentationSuppressionScannable(Scannable inner) {
+          if (inner.isScanAvailable()) {
+              this.innerScannable = inner;
+          } else {
+              this.innerScannable = null;
+          }
+      }
+        @Override
+        @SuppressWarnings("rawtypes") // that's how the method is defined
+        public Object scanUnsafe(Attr attr) {
+            return scanUnsafeCore(innerScannable, attr);
+        }
+
+        @SuppressWarnings("rawtypes") // that's how the method is defined
+        public static Object scanUnsafeCore(Scannable sourceScannable, Attr attr) {
+
+            if (sourceScannable != null) {
+
+                Object raw = sourceScannable.scanUnsafe(attr);
+                if (raw != null) {
+                    if (raw instanceof Scannable && !(raw instanceof InstrumentationSuppression)) {
+                        System.out.println(attr + " -> InstrumentationSuppressionScannable." + raw + " -> " + raw.getClass().getName());
+                        return new InstrumentationSuppressionScannable((Scannable)raw);
+                    } else {
+                        System.out.println(attr + " -> " + raw.toString() + " -> " + raw.getClass().getName());
+                    }
+                } else {
+                    System.out.println(attr + " -> NULL");
+                }
+
+                return raw;
+            }
+
+            System.out.println(attr + " -> NOT SCANNABLE");
+            return null;
+        }
+    }
+
+    static class InstrumentationSuppressionMono extends Mono<Object> implements InstrumentationSuppression {
+        private static final Object VALUE = new Object();
+
+        static <T> Mono<T> create(Mono<T> source) {
+            return new InstrumentationSuppressionMono(source).flatMap(unused -> source);
+        }
+        private final Scannable sourceScannable;
+
+        private InstrumentationSuppressionMono(Mono<?> source) {
+            if (source instanceof Scannable) {
+                this.sourceScannable = (Scannable)source;
+            } else {
+                this.sourceScannable = null;
+            }
+        }
+
+        @Override
+        // Interface method doesn't have type parameter, so we can't add it either.
+        @SuppressWarnings("rawtypes")
+        public Object scanUnsafe(Attr attr) {
+
+            return InstrumentationSuppressionScannable.scanUnsafeCore(this.sourceScannable, attr);
+        }
+
+        @Override
+        public void subscribe(CoreSubscriber<? super Object> actual) {
+            actual.onSubscribe(Operators.scalarSubscription(actual, VALUE));
+        }
+    }
 
   private static class Lifter<T>
       implements BiFunction<Scannable, CoreSubscriber<? super T>, CoreSubscriber<? super T>> {
