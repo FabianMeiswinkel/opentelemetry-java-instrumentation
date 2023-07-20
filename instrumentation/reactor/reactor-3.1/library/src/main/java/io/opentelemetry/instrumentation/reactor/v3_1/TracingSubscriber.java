@@ -35,9 +35,10 @@ public class TracingSubscriber<T> implements CoreSubscriber<T> {
   private static final Class<?> fluxRetrySubscriberClass = getFluxRetrySubscriberClass();
   private static final Class<?> fluxRetryWhenSubscriberClass = getFluxRetryWhenSubscriberClass();
   private final io.opentelemetry.context.Context traceContext;
+
+  private final io.opentelemetry.context.Context validTraceContextOrNull;
   private final Subscriber<? super T> subscriber;
   private final Context context;
-  private final boolean hasContextToPropagate;
 
   public TracingSubscriber(Subscriber<? super T> subscriber, Context ctx) {
     this(subscriber, ctx, io.opentelemetry.context.Context.current());
@@ -50,36 +51,53 @@ public class TracingSubscriber<T> implements CoreSubscriber<T> {
     this.subscriber = subscriber;
     this.context = ctx;
     this.traceContext = ContextPropagationOperator.getOpenTelemetryContext(ctx, contextToPropagate);
-    this.hasContextToPropagate =
+    boolean hasContextToPropagate =
         traceContext == null ? false : Span.fromContext(traceContext).getSpanContext().isValid();
+    this.validTraceContextOrNull = hasContextToPropagate ? traceContext : null;
   }
 
   @Override
   public void onSubscribe(Subscription subscription) {
-    withActiveSpan(() -> subscriber.onSubscribe(subscription));
+      if (validTraceContextOrNull != io.opentelemetry.context.Context.current()) {
+          withActiveSpan(() -> subscriber.onSubscribe(subscription));
+      } else {
+          subscriber.onSubscribe(subscription);
+      }
   }
 
   @Override
   public void onNext(T o) {
-    withActiveSpan(() -> subscriber.onNext(o));
+      if (validTraceContextOrNull != io.opentelemetry.context.Context.current()) {
+          withActiveSpan(() -> subscriber.onNext(o));
+      } else {
+          subscriber.onNext(o);
+      }
   }
 
   @Override
   public void onError(Throwable throwable) {
-    if (!hasContextToPropagate
+    if (validTraceContextOrNull == null
         && (fluxRetrySubscriberClass == subscriber.getClass()
             || fluxRetryWhenSubscriberClass == subscriber.getClass())) {
       // clear context for retry to avoid having retried operations run with currently active
       // context as parent context
       withActiveSpan(io.opentelemetry.context.Context.root(), () -> subscriber.onError(throwable));
     } else {
-      withActiveSpan(() -> subscriber.onError(throwable));
+        if (validTraceContextOrNull != io.opentelemetry.context.Context.current()) {
+            withActiveSpan(() -> subscriber.onError(throwable));
+        } else {
+            subscriber.onError(throwable);
+        }
     }
   }
 
   @Override
   public void onComplete() {
-    withActiveSpan(subscriber::onComplete);
+      if (validTraceContextOrNull != io.opentelemetry.context.Context.current()) {
+          withActiveSpan(subscriber::onComplete);
+      } else {
+          subscriber.onComplete();
+      }
   }
 
   @Override
@@ -88,17 +106,21 @@ public class TracingSubscriber<T> implements CoreSubscriber<T> {
   }
 
   private void withActiveSpan(Runnable runnable) {
-    withActiveSpan(hasContextToPropagate ? traceContext : null, runnable);
+    if (validTraceContextOrNull != io.opentelemetry.context.Context.current()) {
+        withActiveSpan(validTraceContextOrNull, runnable);
+    } else {
+        runnable.run();
+    }
   }
 
   private static void withActiveSpan(io.opentelemetry.context.Context context, Runnable runnable) {
-    if (context != null) {
-      try (Scope ignored = context.makeCurrent()) {
-        runnable.run();
+      if (context != null && io.opentelemetry.context.Context.current() != context) {
+          try (Scope ignored = context.makeCurrent()) {
+              runnable.run();
+          }
+      } else {
+          runnable.run();
       }
-    } else {
-      runnable.run();
-    }
   }
 
   private static Class<?> getFluxRetrySubscriberClass() {

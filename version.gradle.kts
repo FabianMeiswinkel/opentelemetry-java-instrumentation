@@ -1,5 +1,5 @@
-val stableVersion = "1.27.0"
-val alphaVersion = "1.27.0-alpha"
+val stableVersion = "1.27.1-OnlyPropagateForDifferentContext"
+val alphaVersion = "1.27.1-OnlyPropagateForDifferentContext-alpha"
 
 allprojects {
   if (findProperty("otel.stable") != "true") {
